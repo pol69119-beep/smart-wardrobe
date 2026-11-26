@@ -1,9 +1,17 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:geolocator/geolocator.dart';
 import 'dart:io';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+  runApp(const SmartWardrobeApp());
+}
 
 class SmartWardrobeApp extends StatefulWidget {
   const SmartWardrobeApp({super.key});
@@ -35,17 +43,11 @@ class _SmartWardrobeAppState extends State<SmartWardrobeApp> {
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: _selectedIndex);
-    _initStorage();
     _requestPermissions();
   }
 
-  Future<void> _initStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    // Initialize any stored data here
-  }
-
   Future<void> _requestPermissions() async {
-    await [Permission.camera, Permission.location].request();
+    await [Permission.camera, Permission.locationWhenInUse].request();
   }
 
   @override
@@ -72,15 +74,15 @@ class _SmartWardrobeAppState extends State<SmartWardrobeApp> {
         bottomNavigationBar: BottomNavigationBar(
           items: const <BottomNavigationBarItem>[
             BottomNavigationBarItem(
-              icon: Icon(Icons.grid_on),
+              icon: Icon(Icons.grid_view),
               label: 'Гардероб',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.fashion),
+              icon: Icon(Icons.checkroom),
               label: 'Образ',
             ),
             BottomNavigationBarItem(
-              icon: Icon(Icons.weather),
+              icon: Icon(Icons.wb_sunny),
               label: 'Погода',
             ),
             BottomNavigationBarItem(
@@ -131,39 +133,38 @@ class _GarmentsGridState extends State<GarmentsGrid> {
     try {
       final snapshot = await _db.collection('garments').orderBy('createdAt', descending: true).get();
       setState(() {
-        _garments = snapshot.docs.map((doc) => {
-          'id': doc.id,
-          'name': doc['name'] ?? 'Без имени',
-          'category': doc['category'] ?? 'Категория',
-          'color': doc['color'] ?? 'Серый',
-          'season': doc['season'] ?? 'Сезон',
-          'imageUrl': doc['imageUrl'] ?? '',
-          'description': doc['description'] ?? '',
+        _garments = snapshot.docs.map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          return {
+            'id': doc.id,
+            'name': data['name'] ?? 'Без имени',
+            'category': data['category'] ?? 'Общее',
+            'color': data['color'] ?? 'Серый',
+            'season': data['season'] ?? 'Лето',
+            'imageUrl': data['imageUrl'] ?? '',
+          };
         }).toList();
         _isLoading = false;
       });
     } catch (e) {
       setState(() {
-        _error = 'Ошибка загрузки: ${e.toString()}';
+        _error = 'Ошибка: ${e.toString()}';
         _isLoading = false;
       });
     }
   }
 
   Future<void> _addGarment() async {
-    final category = await _showDialog('Добавить вещь', {
-      'name': 'Название',
-      'category': 'Категория',
-      'color': 'Цвет',
-      'season': 'Сезон',
-    });
+    final category = await _showDialog(
+      'Добавить вещь', 
+      {'name': 'Название', 'category': 'Категория', 'color': 'Цвет', 'season': 'Сезон'},
+    );
 
     if (category != null) {
       final imageFile = await _picker.pickImage(source: ImageSource.gallery);
-      String? imageUrl;
+      String imageUrl = '';
       if (imageFile != null) {
-        // Загрузка изображения (заглушка - в реальном приложении загружаем на Firebase Storage)
-        imageUrl = 'https://via.placeholder.com/300x400?text=${category['name']}';
+        imageUrl = 'https://via.placeholder.com/300x400?text=${Uri.encodeComponent(category['name']!)}';
       }
 
       await _db.collection('garments').add({
@@ -172,7 +173,6 @@ class _GarmentsGridState extends State<GarmentsGrid> {
         'color': category['color'],
         'season': category['season'],
         'imageUrl': imageUrl,
-        'description': '',
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -219,9 +219,9 @@ class _GarmentsGridState extends State<GarmentsGrid> {
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxis(
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 2,
-              mainAxisExtent: 250,
+              childAspectRatio: 0.8,
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
             ),
@@ -240,7 +240,7 @@ class _GarmentsGridState extends State<GarmentsGrid> {
           const Padding(
             padding: EdgeInsets.all(24.0),
             child: Text(
-              'Нет вещей в гардеробе. Добавьте первую!',
+              'Нет вещей в гардеробе. Нажмите "+" чтобы добавить.',
               style: TextStyle(color: Colors.grey, fontSize: 16),
             ),
           ),
@@ -265,7 +265,7 @@ class _GarmentsGridState extends State<GarmentsGrid> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Удалить вещь?'),
-        content: const Text('Вы уверены, что хотите удалить эту вещь из гардероба?'),
+        content: const Text('Вы уверены, что хотите удалить эту вещь?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -283,9 +283,6 @@ class _GarmentsGridState extends State<GarmentsGrid> {
       await _db.collection('garments').doc(id).delete();
       if (!mounted) return;
       _loadGarments();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Вещь удалена')),
-      );
     }
   }
 
@@ -299,9 +296,6 @@ class _GarmentsGridState extends State<GarmentsGrid> {
       await _db.collection('garments').doc(garment['id']).update(result);
       if (!mounted) return;
       _loadGarments();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Вещь обновлена')),
-      );
     }
   }
 }
@@ -324,7 +318,7 @@ class _BuildDialogState extends State<_BuildDialog> {
   void initState() {
     super.initState();
     for (final key in widget.fields.keys) {
-      _controllers[key] = TextEditingController(text: widget.fields[key]);
+      _controllers[key] = TextEditingController();
     }
   }
 
@@ -349,17 +343,9 @@ class _BuildDialogState extends State<_BuildDialog> {
                 padding: const EdgeInsets.symmetric(vertical: 4.0),
                 child: TextFormField(
                   controller: _controllers[key],
-                  decoration: InputDecoration(
-                    labelText: key,
-                    border: const OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Введите $key';
-                    }
-                    return null;
-                  },
-                );
+                  decoration: InputDecoration(labelText: key, border: const OutlineInputBorder()),
+                  validator: (value) => (value == null || value.isEmpty) ? 'Введите $key' : null,
+                ),
               );
             }).toList(),
           ),
@@ -375,7 +361,7 @@ class _BuildDialogState extends State<_BuildDialog> {
             if (_formKey.currentState!.validate()) {
               final result = {};
               for (final key in widget.fields.keys) {
-                result[key] = _controllers[key].text;
+                result[key] = _controllers[key]!.text;
               }
               Navigator.of(context).pop(result);
             }
@@ -423,35 +409,19 @@ class _EditGarmentDialogState extends State<_EditGarmentDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Редактировать вещь'),
+      title: const Text('Редактировать'),
       content: SingleChildScrollView(
         child: Column(
           children: [
-            TextFormField(
-              controller: _nameController,
-              decoration: const InputDecoration(labelText: 'Название'),
-              validator: (v) => v?.isEmpty ?? true ? 'Введите название' : null,
-            ),
-            TextFormField(
-              controller: _categoryController,
-              decoration: const InputDecoration(labelText: 'Категория'),
-            ),
-            TextFormField(
-              controller: _colorController,
-              decoration: const InputDecoration(labelText: 'Цвет'),
-            ),
-            TextFormField(
-              controller: _seasonController,
-              decoration: const InputDecoration(labelText: 'Сезон'),
-            ),
+            TextFormField(controller: _nameController, decoration: const InputDecoration(labelText: 'Название')),
+            TextFormField(controller: _categoryController, decoration: const InputDecoration(labelText: 'Категория')),
+            TextFormField(controller: _colorController, decoration: const InputDecoration(labelText: 'Цвет')),
+            TextFormField(controller: _seasonController, decoration: const InputDecoration(labelText: 'Сезон')),
           ],
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Отмена'),
-        ),
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Отмена')),
         ElevatedButton(
           onPressed: () {
             Navigator.of(context).pop({
@@ -478,24 +448,10 @@ class OutfitBuilder extends StatefulWidget {
 class _OutfitBuilderState extends State<OutfitBuilder> {
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Подбор образа'),
-      ),
-      body: const Center(
-        child: Text(
-          'Функция подбора образов будет доступна скоро!\n\n'
-          'В гардеробе сохраняйте вещи с категориями, цветом и сезоной,\n'
-          'и система будет подбирать варианты для разных погод и событий.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 18),
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // Навигация к камере для добавления фото
-        },
-        child: const Icon(Icons.camera_alt),
+    return const Center(
+      child: Text(
+        'Функция подбора образов\nдоступна после добавления вещей',
+        textAlign: TextAlign.center,
       ),
     );
   }
@@ -513,190 +469,50 @@ class _WeatherPickerState extends State<WeatherPicker> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Погода'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Выберите погоду для подображаемых образов:',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Выберите погоду:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 12,
+            children: ['sunny', 'rain', 'cloudy', 'snow'].map((w) {
+              return ChoiceChip(
+                label: Text(w.isEmpty ? w : w),
+                selected: _selectedWeather == w,
+                onSelected: (s) => setState(() => _selectedWeather = w),
+              );
+            }).toList(),
+          ),
+          const Spacer(),
+          ElevatedButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Подбор для $_selectedWeather')),
+              );
+            },
+            child: const Text('Подобрать образ'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.indigo,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 50),
             ),
-            const SizedBox(height: 24),
-            Wrap(
-              spacing: 16,
-              runSpacing: 16,
-              children: [
-                _WeatherChip(
-                  label: 'Солнечно',
-                  value: 'sunny',
-                  selected: _selectedWeather == 'sunny',
-                  onSelected: (selected) {
-                    setState(() => _selectedWeather = 'sunny');
-                  },
-                ),
-                _WeatherChip(
-                  label: 'Дождь',
-                  value: 'rain',
-                  selected: _selectedWeather == 'rain',
-                  onSelected: (selected) {
-                    setState(() => _selectedWeather = 'rain');
-                  },
-                ),
-                _WeatherChip(
-                  label: 'Облачно',
-                  value: 'cloudy',
-                  selected: _selectedWeather == 'cloudy',
-                  onSelected: (selected) {
-                    setState(() => _selectedWeather = 'cloudy');
-                  },
-                ),
-                _WeatherChip(
-                  label: 'Снег',
-                  value: 'snow',
-                  selected: _selectedWeather == 'snow',
-                  onSelected: (selected) {
-                    setState(() => _selectedWeather = 'snow');
-                  },
-                ),
-              ],
-            ),
-            const Spacer(),
-            ElevatedButton(
-              onPressed: () {
-                // Поиск образов под выбранную погоду
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Подбор образов для $_selectedWeather погоды')),
-                );
-              },
-              child: const Text('Подобрать образ'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.indigo,
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 50),
-              ),
-            ),
-            const SizedBox(height: 24),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _WeatherChip extends StatelessWidget {
-  final String label;
-  final String value;
-  final bool selected;
-  final ValueChanged<bool> onSelected;
-
-  const _WeatherChip({
-    required this.label,
-    required this.value,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ChoiceChip(
-      label: Text(label),
-      selected: selected,
-      onSelected: onSelected,
-      selectedColor: Colors.indigo,
-      backgroundColor: Colors.grey[200],
-      labelStyle: TextStyle(
-        color: selected ? Colors.white : Colors.indigo,
-        fontWeight: FontWeight.w500,
-      ),
-    );
-  }
-}
-
-class HistoryPage extends StatefulWidget {
+class HistoryPage extends StatelessWidget {
   const HistoryPage({super.key});
 
   @override
-  State<HistoryPage> createState() => _HistoryPageState;
-}
-
-class _HistoryPageState extends State<HistoryPage> {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-  List<Map<String, dynamic>> _outfits = [];
-  bool _isLoading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadHistory();
-  }
-
-  Future<void> _loadHistory() async {
-    setState(() => _isLoading = true);
-    try {
-      final snapshot = await _db.collection('outfits').orderBy('createdAt', descending: true).limit(20).get();
-      setState(() {
-        _outfits = snapshot.docs.map((doc) => {
-          'id': doc.id,
-          'title': doc['title'] ?? 'Образ',
-          'garments': List<String>.from(doc['garments'] ?? []),
-          'weather': doc['weather'] ?? 'sunny',
-          'createdAt': doc['createdAt']?.toDate().toString() ?? '',
-        }).toList();
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    return Column(
-      children: [
-        const Expanded(
-          child: Center(
-            child: Text(
-              'История образов',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-          ),
-        ),
-        Expanded(
-          child: _isLoading || _outfits.isEmpty
-              ? const Center(child: Text('Нет сохраненных образов'))
-              : ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _outfits.length,
-                  itemBuilder: (context, index) {
-                    final outfit = _outfits[index];
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: ListTile(
-                        leading: const Icon(Icons.fashion),
-                        title: Text(outfit['title']),
-                        subtitle: Text('${outfit['garments'].length} вещей, ${outfit['weather']}'),
-                        trailing: Text(
-                          outfit['createdAt'].split(' ').first,
-                          style: const TextStyle(fontSize: 12, color: Colors.grey),
-                        ),
-                        onTap: () {
-                          // Навигация к деталям образа
-                        },
-                      ),
-                    );
-                  },
-                ),
-        ),
-      ],
+    return const Center(
+      child: Text('История образов\nбудет доступна скоро', textAlign: TextAlign.center),
     );
   }
 }
@@ -709,7 +525,6 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
   Map<String, dynamic>? _userData;
   bool _isLoading = true;
 
@@ -720,102 +535,41 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadUserData() async {
-    try {
-      final snapshot = await _db.collection('users').get();
-      if (snapshot.docs.isNotEmpty) {
-        setState(() {
-          _userData = {
-            'id': snapshot.docs.first.id,
-            'name': snapshot.docs.first['name'] ?? 'Пользователь',
-            'email': snapshot.docs.first['email'] ?? '',
-            'createdAt': snapshot.docs.first['createdAt'],
-          };
-          _isLoading = false;
-        });
-      } else {
-        // Создаем нового пользователя
-        await _db.collection('users').add({
-          'name': '',
-          'email': '',
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        setState(() {
-          _userData = {
-            'id': '',
-            'name': '',
-            'email': '',
-            'createdAt': null,
-          };
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      setState(() => _isLoading = false);
-    }
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _userData = {
+        'name': prefs.getString('name') ?? 'Пользователь',
+        'email': prefs.getString('email') ?? '',
+      };
+      _isLoading = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Профиль'),
-      ),
-      body: Center(
-        child: _userData == null
-            ? const Text('Данные пользователя не найдены')
-            : SingleChildScrollView(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircleAvatar(
-                      radius: 50,
-                      backgroundColor: Colors.indigo,
-                      child: Icon(Icons.person, size: 50, color: Colors.white),
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      _userData!['name'] ?? 'Имя',
-                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _userData!['email'] ?? '',
-                      style: const TextStyle(fontSize: 16, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 32),
-                    ElevatedButton.icon(
-                      onPressed: () {},
-                      icon: const Icon(Icons.edit),
-                      label: const Text('Редактировать профиль'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.indigo,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size(200, 50),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircleAvatar(radius: 50, backgroundColor: Colors.indigo, child: Icon(Icons.person, size: 50, color: Colors.white)),
+          const SizedBox(height: 24),
+          Text(_userData!['name'] ?? 'Имя', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Text(_userData!['email'] ?? '', style: const TextStyle(fontSize: 16, color: Colors.grey)),
+        ],
       ),
     );
   }
 }
 
-class GarmentCard extends StatelessWidget {
+class _GarmentCard extends StatelessWidget {
   final Map<String, dynamic> garment;
   final VoidCallback onDelete;
   final VoidCallback onEdit;
 
-  const GarmentCard({
-    required this.garment,
-    required this.onDelete,
-    required this.onEdit,
-    super.key,
-  });
+  const _GarmentCard({required this.garment, required this.onDelete, required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
@@ -823,96 +577,43 @@ class GarmentCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Изображение
           Expanded(
             child: ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(8)),
-              child: garment['imageUrl'] != null && garment['imageUrl'].isNotEmpty
+              child: garment['imageUrl'] != null && (garment['imageUrl'] as String).isNotEmpty
                   ? Image.network(
                       garment['imageUrl'],
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const Icon(Icons.image, size: 80, color: Colors.grey),
+                      errorBuilder: (context, error, stackTrace) => const Icon(Icons.image, size: 80),
                     )
-                  : const Container(
-                      color: Colors.grey[300],
-                      child: Icon(Icons.image, size: 80, color: Colors.grey),
-                    ),
+                  : const Container(color: Colors.grey, child: Icon(Icons.image, size: 80)),
             ),
           ),
-          // Информация
           Padding(
             padding: const EdgeInsets.all(8.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  garment['name'] ?? 'Без имени',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                Text(garment['name'] ?? 'Без имени', style: const TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text(garment['category'] ?? '', style: const TextStyle(fontSize: 12, color: Colors.grey)),
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    const Icon(Icons.label, size: 12, color: Colors.grey),
+                    const Icon(Icons.circle, size: 12, color: Colors.grey),
                     const SizedBox(width: 4),
-                    Text(
-                      garment['category'] ?? '—',
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                    const Spacer(),
-                    const Icon(Icons.color_lens, size: 12, color: Colors.grey),
-                    const SizedBox(width: 4),
-                    Text(
-                      garment['color'] ?? '—',
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.calendar_today, size: 12, color: Colors.grey),
-                    const SizedBox(width: 4),
-                    Text(
-                      garment['season'] ?? '—',
-                      style: const TextStyle(fontSize: 12, color: Colors.grey),
-                    ),
+                    Text(garment['color'] ?? '', style: const TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
               ],
             ),
           ),
-          // Кнопки действий
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
             child: Row(
               children: [
-                Expanded(
-                  child: TextButton.icon(
-                    onPressed: onEdit,
-                    icon: const Icon(Icons.edit, size: 16),
-                    label: const Text('Редактировать'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.indigo,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: TextButton.icon(
-                    onPressed: onDelete,
-                    icon: const Icon(Icons.delete, size: 16, color: Colors.red),
-                    label: const Text('Удалить'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.red,
-                    ),
-                  ),
-                ),
+                Expanded(TextButton(onPressed: onEdit, child: const Text('Ред.') const)),
+                Expanded(TextButton(onPressed: onDelete, child: const Text('Удалить', style: TextStyle(color: Colors.red)))),
               ],
             ),
           ),
