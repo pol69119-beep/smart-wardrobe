@@ -18,17 +18,21 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.16.0"
+          flutter-version: "3.19.0"
           channel: "stable"
-
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          ndk-version: r26d
+          cmdline-tools-version: latest
 
       - name: Get Flutter packages
         run: flutter pub get
