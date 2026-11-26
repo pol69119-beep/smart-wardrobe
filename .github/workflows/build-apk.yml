@@ -30,9 +30,14 @@ jobs:
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
         with:
-          api-level: 34
-          ndk-version: r26d
           cmdline-tools-version: latest
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install Android packages
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - name: Get Flutter packages
         run: flutter pub get
