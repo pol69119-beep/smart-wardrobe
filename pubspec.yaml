@@ -1,0 +1,26 @@
+name: smartwardrobe
+description: Smart Wardrobe - приложение для управления гардеробом
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.2.2
+  image_picker: ^1.0.4
+  path_provider: ^2.1.1
+  path: ^1.8.3
+  permission_handler: ^11.3.1
+  geolocator: ^13.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
